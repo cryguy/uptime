@@ -332,20 +332,28 @@ function detailGet(
             </div>
             <div class="checks-table">
               <div class="checks-row head">
-                <div>When</div><div>Status</div><div>Latency</div><div>Detail</div>
+                <div>When</div>
+                <div>Status</div>
+                <div title="Response time for successful checks. Hidden for timeout failures — the meaningful number is in the Detail column.">Latency</div>
+                <div>Detail</div>
               </div>
               {results.length === 0 ? (
                 <div class="incident-card muted" style="text-align:center;padding:18px">No checks recorded yet.</div>
-              ) : results.map((r) => (
-                <div class={`checks-row${r.status === "down" ? " failed" : ""}`}>
-                  <div class="when">{formatAgoCompact(r.checked_at)}</div>
-                  <div><StatusPill status={r.status as "up" | "down"} /></div>
-                  <div class="latency">{r.latency_ms !== null ? `${r.latency_ms}ms` : "—"}</div>
-                  <div class="detail-text" title={ctx.isAdmin ? (r.detail ?? "") : ""} safe>
-                    {ctx.isAdmin ? (r.detail ?? "") : publicDetail(r.detail, r.status)}
+              ) : results.map((r) => {
+                // Hide latency on timeout rows — the number is timeout_ms + jitter,
+                // confusing next to the "timeout after Nms" detail.
+                const isTimeout = r.status === "down" && r.detail !== null && /timeout/i.test(r.detail);
+                return (
+                  <div class={`checks-row${r.status === "down" ? " failed" : ""}`}>
+                    <div class="when">{formatAgoCompact(r.checked_at)}</div>
+                    <div><StatusPill status={r.status as "up" | "down"} /></div>
+                    <div class="latency">{isTimeout || r.latency_ms === null ? "—" : `${r.latency_ms}ms`}</div>
+                    <div class="detail-text" title={ctx.isAdmin ? (r.detail ?? "") : ""} safe>
+                      {ctx.isAdmin ? (r.detail ?? "") : publicDetail(r.detail, r.status)}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

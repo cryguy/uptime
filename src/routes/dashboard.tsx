@@ -478,9 +478,15 @@ function dashboardHandler(req: Bun.BunRequest<"/dashboard">, ctx: PageContext): 
         <div class="dash-table" data-density={ctx.density}>
           <div class={`dash-thead${ctx.isAdmin ? " with-bulk" : ""}`}>
             {ctx.isAdmin ? <div><input type="checkbox" id="dash-row-check-all" aria-label="Select all" /></div> : ""}
-            <div>Monitor</div><div>Type</div><div>Status</div>
-            <div>Latency</div><div>Latency · 1h</div><div>Uptime · 24h</div>
-            <div>Last</div><div>Stable</div><div></div>
+            <div>Monitor</div>
+            <div>Type</div>
+            <div>Status</div>
+            <div title="Latest response time for up monitors. Down monitors show — since the number is not a response time.">Latency</div>
+            <div title="Response times across the last hour. Hover for individual values.">Latency · 1h</div>
+            <div title="Hourly uptime buckets — green = all checks passed in that hour, red = any failed.">Uptime · 24h</div>
+            <div title="How long ago the most recent check ran.">Last</div>
+            <div title="How long the monitor has been in its current status (up or down).">Stable</div>
+            <div></div>
           </div>
           <div class="dash-table-scroll" id="dash-table-scroll">
             {renderRows()}

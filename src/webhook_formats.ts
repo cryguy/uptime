@@ -33,6 +33,42 @@ export type AlertEvent = {
 const COLOR_DOWN = 0xff5a6a;
 const COLOR_UP = 0x3dcf8e;
 
+// Distill the raw outcome into human-readable phrasing.
+//
+// The trap we're avoiding: `latency_ms` for a *timeout* failure isn't the
+// response time, it's how long we waited before aborting — typically
+// "timeout_ms + a few ms of jitter". Pasting "10017ms" next to "timeout
+// after 10000ms" makes readers wonder if the latency is meaningful. It's
+// not. For timeouts we drop the latency line entirely; the detail string
+// already carries the only number that matters (the configured limit).
+function describe(e: AlertEvent): {
+  verb: string;
+  reason: string;
+  timing: string | null;
+} {
+  const isDown = e.event === "down";
+  if (!isDown) {
+    return {
+      verb: "recovered",
+      reason: e.detail,
+      timing: `response in ${e.latency_ms}ms`,
+    };
+  }
+  const timeoutMatch = /timeout after (\d+)ms/i.exec(e.detail);
+  if (timeoutMatch) {
+    return {
+      verb: "is down",
+      reason: `timed out after ${timeoutMatch[1]}ms (the configured limit)`,
+      timing: null,
+    };
+  }
+  return {
+    verb: "is down",
+    reason: e.detail,
+    timing: `failed in ${e.latency_ms}ms`,
+  };
+}
+
 function generic(e: AlertEvent): string {
   return JSON.stringify({
     event: e.event,
@@ -46,20 +82,14 @@ function generic(e: AlertEvent): string {
 function slack(e: AlertEvent): string {
   const isDown = e.event === "down";
   const icon = isDown ? ":red_circle:" : ":large_green_circle:";
-  const headline = `${icon} *${e.monitor_name}* ${isDown ? "is down" : "recovered"}`;
+  const { verb, reason, timing } = describe(e);
+  const tsLink = `<!date^${Math.floor(e.at / 1000)}^{date_short_pretty} {time}|${new Date(e.at).toISOString()}>`;
+  const ctxText = timing ? `${timing} · ${tsLink}` : tsLink;
   return JSON.stringify({
-    text: `${icon} ${e.monitor_name} ${isDown ? "is down" : "recovered"}`,
+    text: `${icon} ${e.monitor_name} ${verb}`,
     blocks: [
-      { type: "section", text: { type: "mrkdwn", text: `${headline}\n_${e.detail}_` } },
-      {
-        type: "context",
-        elements: [
-          {
-            type: "mrkdwn",
-            text: `latency: ${e.latency_ms}ms · <!date^${Math.floor(e.at / 1000)}^{date_short_pretty} {time}|${new Date(e.at).toISOString()}>`,
-          },
-        ],
-      },
+      { type: "section", text: { type: "mrkdwn", text: `${icon} *${e.monitor_name}* ${verb}\n_${reason}_` } },
+      { type: "context", elements: [{ type: "mrkdwn", text: ctxText }] },
     ],
   });
 }
@@ -67,18 +97,26 @@ function slack(e: AlertEvent): string {
 function discord(e: AlertEvent): string {
   const isDown = e.event === "down";
   const icon = isDown ? "🔴" : "🟢";
+  const { verb, reason, timing } = describe(e);
+  const fields: Array<{ name: string; value: string; inline: boolean }> = [
+    { name: "Status", value: e.event, inline: true },
+  ];
+  // Latency field is only meaningful when the number reflects a real
+  // response time (or a real time-to-failure-detection). For timeouts the
+  // number is config + jitter, so we omit it.
+  if (timing !== null) {
+    const label = isDown ? "Time to failure" : "Response time";
+    fields.push({ name: label, value: `${e.latency_ms}ms`, inline: true });
+  }
   return JSON.stringify({
-    content: `${icon} **${e.monitor_name}** ${isDown ? "is down" : "is back up"}`,
+    content: `${icon} **${e.monitor_name}** ${verb}`,
     embeds: [
       {
         title: e.monitor_name,
-        description: e.detail,
+        description: reason,
         color: isDown ? COLOR_DOWN : COLOR_UP,
         timestamp: new Date(e.at).toISOString(),
-        fields: [
-          { name: "Status", value: e.event, inline: true },
-          { name: "Latency", value: `${e.latency_ms}ms`, inline: true },
-        ],
+        fields,
       },
     ],
   });
@@ -87,10 +125,11 @@ function discord(e: AlertEvent): string {
 function googleChat(e: AlertEvent): string {
   const isDown = e.event === "down";
   const icon = isDown ? "🔴" : "🟢";
-  const verb = isDown ? "is down" : "is back up";
-  return JSON.stringify({
-    text: `${icon} *${e.monitor_name}* ${verb}\n_${e.detail}_ · ${e.latency_ms}ms`,
-  });
+  const { verb, reason, timing } = describe(e);
+  // Google Chat markdown: *bold*, _italic_, single asterisks (not CommonMark).
+  const parts = [`${icon} *${e.monitor_name}* ${verb}`, `_${reason}_`];
+  if (timing) parts.push(timing);
+  return JSON.stringify({ text: parts.join(" · ") });
 }
 
 // JSON-safe escape for values substituted into a custom template. Escapes
