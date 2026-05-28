@@ -105,6 +105,17 @@ db.exec(`
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS api_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT NOT NULL,
+    prefix TEXT NOT NULL,
+    hash TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    revoked_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(hash) WHERE revoked_at IS NULL;
 `);
 
 // Idempotent migrations: ALTER TABLE adds columns to existing DBs; on fresh

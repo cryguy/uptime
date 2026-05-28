@@ -8,8 +8,9 @@ import {
 import type { PageContext } from "../views/context";
 import type { MonitorType } from "../checks/types";
 import {
-  getBannerIncident, getFleetKpis, getFleetP95LatencySparkline, getFleetUpPercentSparkline,
-  getMonitor24hBuckets, getMonitorLatencySpark, getRecentAlerts, getRecentlyResolved,
+  getActiveIncidents, getBannerIncident, getFleetKpis, getFleetP95LatencySparkline,
+  getFleetUpPercentSparkline, getMonitor24hBuckets, getMonitorLatencySpark,
+  getRecentAlerts, getRecentlyResolved,
   type IncidentRow, type RecentAlert,
 } from "../queries";
 import { htmlResponse, publicRoute } from "./wrap";
@@ -144,41 +145,56 @@ function DashboardRowEl({ m, isAdmin }: { m: DashboardRow; isAdmin?: boolean }):
 // === Right rail panels ===
 
 function ActiveIncidentPanel({
-  incident,
+  incidents,
   isAdmin,
 }: {
-  incident: IncidentRow;
+  incidents: IncidentRow[];
   isAdmin: boolean;
 }): JSX.Element {
+  const visible = incidents.slice(0, 5);
+  const overflow = incidents.length - visible.length;
   return (
     <div class="panel">
       <div class="panel-head">
-        <h3 class="panel-h3">Active incident</h3>
-        <span class="panel-meta" style="color:var(--down)">1 open</span>
+        <h3 class="panel-h3">{incidents.length === 1 ? "Active incident" : "Active incidents"}</h3>
+        <span class="panel-meta" style="color:var(--down)">{String(incidents.length)} open</span>
       </div>
-      <div class="incident-card">
-        <div class="incident-card-head">
-          <StatusDot status="down" />
-          <span class="incident-card-name" safe>{incident.monitor_name}</span>
-          <span class="incident-card-time">{formatAgo(incident.started_at)}</span>
+      {visible.map((incident, idx) => (
+        <div
+          class="incident-card"
+          style={idx > 0 ? "border-top:1px solid var(--border)" : ""}
+        >
+          <div class="incident-card-head">
+            <StatusDot status="down" />
+            <a href={`/incidents/${incident.id}`} class="incident-card-name" style="color:inherit" safe>{incident.monitor_name}</a>
+            {incident.acked_at !== null
+              ? <span class="pill pill-disabled" style="font-size:10.5px;padding:1px 5px">acked</span>
+              : ""}
+            <span class="incident-card-time">{formatAgo(incident.started_at)}</span>
+          </div>
+          <div class="incident-card-detail">
+            {isAdmin && incident.initial_detail ? (
+              <span safe>{incident.initial_detail}</span>
+            ) : (
+              "Connection failed on consecutive checks."
+            )}
+          </div>
+          <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+            <a href={`/monitors/${incident.monitor_id}`} class="btn btn-ghost btn-mini">View checks</a>
+            {isAdmin && incident.acked_at === null ? (
+              <form method="post" action={`/incidents/${incident.id}/ack`} style="margin:0">
+                <input type="hidden" name="next" value="/dashboard" />
+                <button type="submit" class="btn btn-ghost btn-mini">Acknowledge</button>
+              </form>
+            ) : ""}
+          </div>
         </div>
-        <div class="incident-card-detail">
-          {isAdmin && incident.initial_detail ? (
-            <span safe>{incident.initial_detail}</span>
-          ) : (
-            "Connection failed on consecutive checks."
-          )}
+      ))}
+      {overflow > 0 ? (
+        <div style="padding:10px 16px;text-align:center;border-top:1px solid var(--border)">
+          <a href="/incidents?tab=open" class="btn-link" safe>{`View all ${incidents.length} open →`}</a>
         </div>
-        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
-          <a href={`/monitors/${incident.monitor_id}`} class="btn btn-ghost btn-mini">View checks</a>
-          {isAdmin ? (
-            <form method="post" action={`/incidents/${incident.id}/ack`} style="margin:0">
-              <input type="hidden" name="next" value="/dashboard" />
-              <button type="submit" class="btn btn-ghost btn-mini">Acknowledge</button>
-            </form>
-          ) : ""}
-        </div>
-      </div>
+      ) : ""}
     </div>
   );
 }
@@ -392,6 +408,7 @@ function dashboardHandler(req: Bun.BunRequest<"/dashboard">, ctx: PageContext): 
 
   const kpis = getFleetKpis();
   const banner = getBannerIncident();
+  const activeIncidents = getActiveIncidents();
   const recentAlerts = getRecentAlerts(5);
   const recentlyResolved = getRecentlyResolved(Date.now() - 7 * 24 * 60 * 60 * 1000, 5);
 
@@ -477,7 +494,7 @@ function dashboardHandler(req: Bun.BunRequest<"/dashboard">, ctx: PageContext): 
         </div>
 
         <aside class="dash-rail">
-          {banner ? <ActiveIncidentPanel incident={banner} isAdmin={ctx.isAdmin} /> : ""}
+          {activeIncidents.length > 0 ? <ActiveIncidentPanel incidents={activeIncidents} isAdmin={ctx.isAdmin} /> : ""}
           <AlertDeliveryPanel alerts={recentAlerts} isAdmin={ctx.isAdmin} />
           <RecentlyResolvedPanel resolved={recentlyResolved} />
         </aside>

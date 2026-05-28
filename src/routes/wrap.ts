@@ -1,4 +1,5 @@
 import { readSession } from "../auth";
+import { verifyToken } from "../api_auth";
 import { pageContext, type PageContext } from "../views/context";
 
 export const htmlHeaders = { "Content-Type": "text/html; charset=utf-8" };
@@ -53,6 +54,27 @@ export function authed<P extends string>(
       return Response.redirect(`/login?next=${next}`, 302);
     }
     return handler(req);
+  };
+}
+
+// API route: requires a valid Bearer token in the Authorization header.
+// Returns 401 JSON otherwise. The handler receives the token id so it can
+// log which client made the request if needed.
+export function apiRoute<P extends string>(
+  handler: (req: Bun.BunRequest<P>, tokenId: number) => Response | Promise<Response>,
+): (req: Bun.BunRequest<P>) => Response | Promise<Response> {
+  return (req) => {
+    const tokenId = verifyToken(req.headers.get("authorization"));
+    if (tokenId === null) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json",
+          "WWW-Authenticate": "Bearer",
+        },
+      });
+    }
+    return handler(req, tokenId);
   };
 }
 

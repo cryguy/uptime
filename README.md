@@ -37,6 +37,11 @@ A self-hosted uptime monitor with a public status page and an admin console — 
 - Sound + tab-title flash on new unacked incidents
 - Per-row 5s auto-refresh via HTMX
 
+**API**
+- REST JSON API at `/api/v1/*` for scripts, MCP servers, and IaC tools
+- Bearer token auth with revocable, per-purpose tokens (mint in Settings)
+- ~20 endpoints covering monitors, incidents, webhooks, stats — see the [API section](#api) below
+
 **Security**
 - Argon2id password hashing, session cookies (HttpOnly · SameSite=Lax)
 - Per-IP login rate limiting (5/min)
@@ -147,6 +152,103 @@ scripts/
 ├── keygen.ts             bun run keygen — emits SESSION_SECRET + ENCRYPTION_KEY
 └── fetch-fonts.ts        bun run fetch-fonts — re-downloads Google Fonts woff2 files
 ```
+
+---
+
+## API
+
+A REST JSON API lives at `/api/v1/*` for programmatic clients (scripts, IaC tools, MCP servers). All endpoints require a Bearer token. Mint tokens in **Settings → API tokens** — the raw token is shown exactly once on creation, after which only its SHA-256 hash is stored. Revoke tokens individually from the same UI.
+
+### Quick start
+
+```bash
+# After minting a token in /settings → API tokens:
+TOKEN='up_<your-token-here>'
+
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/v1/monitors
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/v1/stats/fleet
+```
+
+### Endpoints
+
+**Monitors**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/monitors` | List all monitors with current state |
+| `POST` | `/api/v1/monitors` | Create a monitor (returns the new id) |
+| `GET` | `/api/v1/monitors/:id` | Read a monitor (includes decrypted config + bound webhook ids) |
+| `PATCH` | `/api/v1/monitors/:id` | Partial update — only supplied fields are changed |
+| `DELETE` | `/api/v1/monitors/:id` | Delete monitor + history |
+| `POST` | `/api/v1/monitors/:id/pause` | Stop checks (sets `enabled=false`) |
+| `POST` | `/api/v1/monitors/:id/resume` | Re-enable checks |
+| `POST` | `/api/v1/monitors/:id/mute` | Body `{"duration_ms": 3600000}` or `{"until": <epoch_ms>}` |
+| `POST` | `/api/v1/monitors/:id/unmute` | Clear mute |
+| `POST` | `/api/v1/monitors/:id/run-now` | Trigger an immediate check (fire-and-forget) |
+| `GET` | `/api/v1/monitors/:id/stats` | Uptime windows, latency percentiles, MTTR, hourly buckets |
+| `GET` | `/api/v1/monitors/:id/checks?limit=100` | Recent check_results |
+
+**Incidents**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/incidents?tab=open\|resolved\|all` | List incidents (default `open`) |
+| `GET` | `/api/v1/incidents/:id` | Read with computed `failed_checks`, `alerts_sent`, and the timeline |
+| `POST` | `/api/v1/incidents/:id/ack` | Acknowledge — clears the banner without resolving |
+| `PATCH` | `/api/v1/incidents/:id` | Body `{"notes": "..."}` — set/update postmortem markdown |
+
+**Webhooks**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/webhooks` | List with per-webhook delivery stats |
+| `POST` | `/api/v1/webhooks` | Create — body `{"name": "...", "url": "https://..."}` |
+| `DELETE` | `/api/v1/webhooks/:id` | Delete |
+| `POST` | `/api/v1/webhooks/:id/toggle` | Flip enabled state |
+
+**Fleet stats + health**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/stats/fleet` | KPIs (total, up, down, p95, MTTR) + recent alert deliveries |
+| `GET` | `/api/v1/healthz` | Returns `{"status": "ok"}` for liveness probes |
+
+### Conventions
+
+- Collections return `{ resource_name: [...] }`; single resources return `{ resource_name: {...} }`
+- Errors return `{ "error": "human-readable message" }` with appropriate 4xx/5xx status
+- Action endpoints with no useful payload return `204 No Content`
+- Timestamps are epoch milliseconds (matches the DB storage format)
+- Field names are snake_case throughout, matching the SQLite schema
+
+### Monitor body shape (POST/PATCH)
+
+```json
+{
+  "name": "api.prod",
+  "type": "http",
+  "config": {
+    "url": "https://api.prod.example.com/health",
+    "method": "GET",
+    "expectedStatus": 200,
+    "headers": { "X-Custom": "value" }
+  },
+  "interval_seconds": 60,
+  "timeout_ms": 10000,
+  "failure_threshold": 2,
+  "success_threshold": 1,
+  "enabled": true,
+  "is_public": true,
+  "group_name": "production",
+  "notes": "**Owner:** ops team",
+  "webhook_ids": [1, 2]
+}
+```
+
+For TCP: `"config": {"host": "db.internal", "port": 5432}`.
+For SSH: `"config": {"host": "...", "username": "...", "privateKey": "...", "command": "...", "expectExitCode": 0}`.
+
+PATCH accepts any subset of these fields. On `type` change, `config` must be re-supplied in the new shape.
 
 ---
 

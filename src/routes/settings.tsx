@@ -6,6 +6,7 @@ import { readSession } from "../auth";
 import {
   applyRetention, changeCredentials, getRetentionDays, rotateEncryptionKey, setRetentionDays,
 } from "../secrets";
+import { listTokens, mintToken, revokeToken, deleteToken } from "../api_auth";
 import { Layout } from "../views/layout";
 import { formatAgo, formatDuration } from "../views/components";
 import type { PageContext } from "../views/context";
@@ -32,6 +33,8 @@ function settingsHandler(req: Bun.BunRequest<"/settings">, ctx: PageContext): Pr
   const url = new URL(req.url);
   const ok = url.searchParams.get("ok");
   const err = url.searchParams.get("err");
+  const newToken = url.searchParams.get("new_token");
+  const tokens = listTokens();
   const monitorsCount = count("SELECT COUNT(*) AS c FROM monitors");
   const resultsCount = count("SELECT COUNT(*) AS c FROM check_results");
   const incidentsCount = count("SELECT COUNT(*) AS c FROM incidents");
@@ -57,6 +60,19 @@ function settingsHandler(req: Bun.BunRequest<"/settings">, ctx: PageContext): Pr
       </div>
 
       {flashFor(ok, err)}
+
+      {newToken ? (
+        <div class="settings-section" style="border-color:var(--warn);background:var(--warn-soft)">
+          <div class="settings-section-head">
+            <h3 class="settings-section-h3" style="color:var(--warn)">New API token · save this now</h3>
+            <span class="settings-section-status">shown once</span>
+          </div>
+          <div class="settings-section-desc">
+            Copy this token immediately — it will not be displayed again. Use it as <code>Authorization: Bearer &lt;token&gt;</code> in API requests.
+          </div>
+          <div class="settings-field-readonly" style="word-break:break-all;font-size:13px;padding:10px 12px;background:var(--bg-2);user-select:all" safe>{newToken}</div>
+        </div>
+      ) : ""}
 
       <div class="settings-grid">
         {/* Authentication */}
@@ -127,6 +143,54 @@ function settingsHandler(req: Bun.BunRequest<"/settings">, ctx: PageContext): Pr
               </div>
             );
           })}
+        </div>
+
+        {/* API tokens */}
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3 class="settings-section-h3">API tokens</h3>
+            <span class="settings-section-status">{String(tokens.filter((t) => t.revoked_at === null).length)} active</span>
+          </div>
+          <div class="settings-section-desc">
+            Bearer tokens for the JSON API at <code>/api/v1/*</code>. Each token can be revoked individually. Only the SHA-256 hash is stored — the raw token is shown exactly once on creation.
+          </div>
+
+          <form method="post" action="/settings/tokens/mint" style="margin:0">
+            <div class="settings-field" style="grid-template-columns:200px 1fr auto">
+              <div class="settings-field-label">Mint new token</div>
+              <input name="label" placeholder="e.g. mcp-server · terraform · script" required style="font-family:inherit" />
+              <button type="submit" class="btn btn-primary btn-mini">Create</button>
+            </div>
+          </form>
+
+          {tokens.length === 0 ? (
+            <div class="muted" style="margin-top:10px">No tokens yet.</div>
+          ) : tokens.map((t) => (
+            <div class="settings-field" style="grid-template-columns:200px 1fr auto auto;gap:12px">
+              <div class="settings-field-label" safe>{t.label}</div>
+              <div class="settings-field-value">
+                <code safe>{t.prefix}</code>
+                <span style="margin-left:10px;color:var(--dim)">
+                  created {formatAgo(t.created_at)}
+                  {t.last_used_at ? ` · used ${formatAgo(t.last_used_at)}` : " · never used"}
+                </span>
+              </div>
+              <div>
+                {t.revoked_at !== null ? (
+                  <span class="pill pill-disabled" style="font-size:10.5px">revoked</span>
+                ) : (
+                  <form method="post" action={`/settings/tokens/${t.id}/revoke`} style="margin:0" onsubmit="return confirm('Revoke this token? API calls using it will start failing immediately.')">
+                    <button type="submit" class="btn btn-ghost btn-mini">Revoke</button>
+                  </form>
+                )}
+              </div>
+              <div>
+                <form method="post" action={`/settings/tokens/${t.id}/delete`} style="margin:0" onsubmit="return confirm('Delete this token row from history?')">
+                  <button type="submit" class="btn btn-ghost btn-mini" style="color:var(--down)">×</button>
+                </form>
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* Retention */}
@@ -264,6 +328,28 @@ function revokeSessionHandler(req: Bun.BunRequest<"/settings/sessions/:id/revoke
   return flashRedirect("Session revoked.");
 }
 
+async function mintTokenHandler(req: Bun.BunRequest<"/settings/tokens/mint">): Promise<Response> {
+  const form = await req.formData();
+  const label = String(form.get("label") ?? "").trim();
+  if (!label) return flashRedirect(undefined, "Token label is required.");
+  const { token } = mintToken(label);
+  // The raw token is one-shot. Query-string transport here is acceptable for
+  // a single-admin self-hosted tool — the browser history of the admin's own
+  // machine is the only place it might persist.
+  const params = new URLSearchParams({ new_token: token });
+  return new Response(null, { status: 303, headers: { Location: `/settings?${params.toString()}` } });
+}
+
+function revokeTokenHandler(req: Bun.BunRequest<"/settings/tokens/:id/revoke">): Response {
+  revokeToken(Number(req.params.id));
+  return flashRedirect("Token revoked. Future API calls with it will return 401.");
+}
+
+function deleteTokenHandler(req: Bun.BunRequest<"/settings/tokens/:id/delete">): Response {
+  deleteToken(Number(req.params.id));
+  return flashRedirect("Token removed.");
+}
+
 export const settingsRoutes = {
   page: { GET: adminRoute(settingsHandler) },
   credentials: { POST: adminRoute(credentialsHandler) },
@@ -271,4 +357,7 @@ export const settingsRoutes = {
   retention: { POST: adminRoute(retentionHandler) },
   purgeNow: { POST: adminRoute(purgeNowHandler) },
   revokeSession: { POST: adminRoute(revokeSessionHandler) },
+  mintToken: { POST: adminRoute(mintTokenHandler) },
+  revokeToken: { POST: adminRoute(revokeTokenHandler) },
+  deleteToken: { POST: adminRoute(deleteTokenHandler) },
 };

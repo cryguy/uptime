@@ -12,6 +12,7 @@ import { webhookRoutes } from "./routes/webhooks";
 import { incidentsRoutes } from "./routes/incidents";
 import { settingsRoutes } from "./routes/settings";
 import { preferenceRoutes } from "./routes/preferences";
+import { apiRoutes } from "./routes/api";
 
 purgeExpiredSessions();
 setInterval(purgeExpiredSessions, 60 * 60 * 1000);
@@ -78,9 +79,31 @@ const server = Bun.serve({
     "/settings/retention": settingsRoutes.retention,
     "/settings/retention/purge-now": settingsRoutes.purgeNow,
     "/settings/sessions/:id/revoke": settingsRoutes.revokeSession,
+    "/settings/tokens/mint": settingsRoutes.mintToken,
+    "/settings/tokens/:id/revoke": settingsRoutes.revokeToken,
+    "/settings/tokens/:id/delete": settingsRoutes.deleteToken,
 
     "/preferences/theme": preferenceRoutes.theme,
     "/preferences/density": preferenceRoutes.density,
+
+    // === JSON API at /api/v1/* — Bearer token auth ===
+    "/api/v1/healthz": apiRoutes.healthz,
+    "/api/v1/monitors": apiRoutes.monitorsList,
+    "/api/v1/monitors/:id": apiRoutes.monitorDetail,
+    "/api/v1/monitors/:id/pause": apiRoutes.monitorPause,
+    "/api/v1/monitors/:id/resume": apiRoutes.monitorResume,
+    "/api/v1/monitors/:id/mute": apiRoutes.monitorMute,
+    "/api/v1/monitors/:id/unmute": apiRoutes.monitorUnmute,
+    "/api/v1/monitors/:id/run-now": apiRoutes.monitorRunNow,
+    "/api/v1/monitors/:id/stats": apiRoutes.monitorStats,
+    "/api/v1/monitors/:id/checks": apiRoutes.monitorChecks,
+    "/api/v1/incidents": apiRoutes.incidentsList,
+    "/api/v1/incidents/:id": apiRoutes.incidentDetail,
+    "/api/v1/incidents/:id/ack": apiRoutes.incidentAck,
+    "/api/v1/webhooks": apiRoutes.webhooksList,
+    "/api/v1/webhooks/:id": apiRoutes.webhookDetail,
+    "/api/v1/webhooks/:id/toggle": apiRoutes.webhookToggle,
+    "/api/v1/stats/fleet": apiRoutes.statsFleet,
   },
   // Fallback handles static assets and 404s. Kept out of the typed
   // routes table to dodge a Response type collision with undici-types
