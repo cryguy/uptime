@@ -33,7 +33,7 @@ A self-hosted uptime monitor with a public status page and an admin console — 
 - Live dashboard with KPI strip (Up · Down · p95 latency · MTTR)
 - Search, filter (status / type / group), group by, density toggle (comfort / compact / dense)
 - Dark + light themes (cookie-persisted)
-- ⌘K command palette for navigation + quick actions
+- Command palette (⌘K on Mac · Ctrl+K elsewhere) for navigation, jumping to monitors by name, and quick actions
 - Sound + tab-title flash on new unacked incidents
 - Per-row 5s auto-refresh via HTMX
 

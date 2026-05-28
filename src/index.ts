@@ -68,7 +68,9 @@ const server = Bun.serve({
 
     "/incidents": incidentsRoutes.list,
     "/incidents/poll": incidentsRoutes.poll,
+    "/incidents/:id": incidentsRoutes.detail,
     "/incidents/:id/ack": incidentsRoutes.ack,
+    "/incidents/:id/notes": incidentsRoutes.notes,
 
     "/settings": settingsRoutes.page,
     "/settings/credentials": settingsRoutes.credentials,

@@ -7,8 +7,10 @@ import {
 import type { PageContext } from "../views/context";
 import {
   ackIncident, getActiveIncidents, getAllIncidents, getBannerIncident,
-  getIncidentAlerts, getIncidentFailures, getRecentlyResolved, type IncidentRow,
+  getIncident, getIncidentAlerts, getIncidentChecks, getIncidentFailures,
+  getRecentlyResolved, setIncidentNotes, type IncidentRow,
 } from "../queries";
+import { renderMarkdown } from "../markdown";
 import { adminRoute, htmlResponse, publicRoute, safeNext } from "./wrap";
 
 type Tab = "open" | "resolved" | "all";
@@ -23,6 +25,20 @@ function IncidentItem({
   isAdmin: boolean;
   tab: Tab;
 }): JSX.Element {
+  return _renderIncidentItem({ incident, isAdmin, tab, withLink: true });
+}
+
+function _renderIncidentItem({
+  incident,
+  isAdmin,
+  tab,
+  withLink,
+}: {
+  incident: IncidentRow;
+  isAdmin: boolean;
+  tab: Tab;
+  withLink: boolean;
+}): JSX.Element {
   const isOpen = incident.ended_at === null;
   const isAcked = incident.acked_at !== null;
   const failures = getIncidentFailures(incident);
@@ -31,16 +47,21 @@ function IncidentItem({
     ? incident.ended_at - incident.started_at
     : Date.now() - incident.started_at;
 
+  const nameNode = (
+    <>
+      <StatusDot status={isOpen ? "down" : "up"} />
+      <span safe>{incident.monitor_name}</span>
+      {isOpen
+        ? <StatusPill status="down" />
+        : <span class="pill pill-up" style="font-size:11px">resolved</span>}
+      {isAcked && isOpen ? <span class="pill pill-disabled" style="font-size:11px">acked</span> : ""}
+    </>
+  );
   return (
     <div class="inc-item">
       <div class="inc-item-head">
         <div class="inc-item-name">
-          <StatusDot status={isOpen ? "down" : "up"} />
-          <span safe>{incident.monitor_name}</span>
-          {isOpen
-            ? <StatusPill status="down" />
-            : <span class="pill pill-up" style="font-size:11px">resolved</span>}
-          {isAcked && isOpen ? <span class="pill pill-disabled" style="font-size:11px">acked</span> : ""}
+          {withLink ? <a href={`/incidents/${incident.id}`} style="display:inline-flex;align-items:center;gap:9px;color:inherit">{nameNode}</a> : nameNode}
         </div>
         <div class="inc-item-since">
           {isOpen
@@ -147,6 +168,178 @@ async function ackHandler(req: Bun.BunRequest<"/incidents/:id/ack">, _ctx: PageC
   return new Response(null, { status: 303, headers: { Location: next } });
 }
 
+// === Incident detail page ===
+
+function detailHandler(
+  req: Bun.BunRequest<"/incidents/:id">,
+  ctx: PageContext,
+): Response | Promise<Response> {
+  const id = Number(req.params.id);
+  const incident = getIncident(id);
+  if (!incident) return new Response("not found", { status: 404 });
+
+  const failures = getIncidentFailures(incident);
+  const alerts = getIncidentAlerts(incident);
+  const duration = incident.ended_at
+    ? incident.ended_at - incident.started_at
+    : Date.now() - incident.started_at;
+  const isOpen = incident.ended_at === null;
+  const checks = getIncidentChecks(incident.monitor_id, incident.started_at, incident.ended_at);
+  // Render newest check first
+  checks.reverse();
+
+  return htmlResponse(
+    <Layout ctx={ctx} title={`Incident · ${incident.monitor_name}`}>
+      <div class="page-breadcrumbs">
+        <a href="/incidents">Incidents</a>
+        <span class="sep">/</span>
+        <span safe>{incident.monitor_name}</span>
+      </div>
+
+      <div class="page-head">
+        <div>
+          <h1 class="page-h1">
+            <StatusDot status={isOpen ? "down" : "up"} />
+            <span safe>{incident.monitor_name}</span>
+            {isOpen
+              ? <StatusPill status="down" />
+              : <span class="pill pill-up" style="font-size:11px">resolved</span>}
+          </h1>
+          <div class="page-meta">
+            {isOpen
+              ? <>
+                  <span style="color:var(--down);font-weight:500">Down for {formatDuration(duration)}</span>
+                  <span style="color:var(--dim)">·</span>
+                  <span>started {formatAgo(incident.started_at)}</span>
+                </>
+              : <>
+                  <span>Resolved {formatAgo(incident.ended_at)}</span>
+                  <span style="color:var(--dim)">·</span>
+                  <span>duration {formatDuration(duration)}</span>
+                </>}
+          </div>
+        </div>
+        <div class="page-actions">
+          <a href={`/monitors/${incident.monitor_id}`} class="btn btn-ghost">Open monitor</a>
+          {ctx.isAdmin && isOpen && incident.acked_at === null ? (
+            <form method="post" action={`/incidents/${incident.id}/ack`} style="margin:0">
+              <input type="hidden" name="next" value={`/incidents/${incident.id}`} />
+              <button type="submit" class="btn btn-danger">Acknowledge</button>
+            </form>
+          ) : ""}
+        </div>
+      </div>
+
+      <div class="detail-grid">
+        {/* LEFT: stats + timeline */}
+        <div>
+          <div class="detail-stats">
+            <div class="detail-stat">
+              <div class="detail-stat-label">Failed checks</div>
+              <div class={`detail-stat-value${failures > 0 ? " down" : ""}`}>{String(failures)}</div>
+              <div class="detail-stat-meta">during this incident</div>
+            </div>
+            <div class="detail-stat">
+              <div class="detail-stat-label">Alerts sent</div>
+              <div class="detail-stat-value">{String(alerts)}</div>
+              <div class="detail-stat-meta">queue entries</div>
+            </div>
+            <div class="detail-stat">
+              <div class="detail-stat-label">Duration</div>
+              <div class="detail-stat-value" safe>{formatDuration(duration)}</div>
+              <div class="detail-stat-meta">{isOpen ? "still open" : "to resolution"}</div>
+            </div>
+            <div class="detail-stat">
+              <div class="detail-stat-label">Acked</div>
+              <div class="detail-stat-value">
+                {incident.acked_at !== null
+                  ? <span safe>{new Date(incident.acked_at).toISOString().slice(11, 19)}</span>
+                  : <span class="muted">no</span>}
+              </div>
+              <div class="detail-stat-meta">{incident.acked_at !== null ? "operator confirmed" : "awaiting ack"}</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h3 class="panel-h3">Check timeline</h3>
+              <span class="panel-meta">{checks.length} {checks.length === 1 ? "check" : "checks"} during incident</span>
+            </div>
+            <div class="checks-table">
+              <div class="checks-row head">
+                <div>When</div><div>Status</div><div>Latency</div><div>Detail</div>
+              </div>
+              {checks.length === 0 ? (
+                <div class="incident-card muted" style="text-align:center;padding:18px">No checks recorded during this incident window.</div>
+              ) : checks.map((c) => (
+                <div class={`checks-row${c.status === "down" ? " failed" : ""}`}>
+                  <div class="when">{formatAgoCompact(c.checked_at)}</div>
+                  <div><StatusPill status={c.status as "up" | "down"} /></div>
+                  <div class="latency">{c.latency_ms !== null ? `${c.latency_ms}ms` : "—"}</div>
+                  <div class="detail-text" title={ctx.isAdmin ? (c.detail ?? "") : ""} safe>
+                    {ctx.isAdmin ? (c.detail ?? "") : (c.status === "up" ? "ok" : "failed")}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT: notes + initial detail */}
+        <div style="display:flex;flex-direction:column;gap:14px">
+          {ctx.isAdmin && incident.initial_detail ? (
+            <div class="panel">
+              <div class="panel-head">
+                <h3 class="panel-h3">Initial failure</h3>
+                <span class="panel-meta">first check that triggered</span>
+              </div>
+              <div style="padding:14px 18px">
+                <code style="font-family:var(--mono);font-size:12px;color:var(--down);word-break:break-all" safe>{incident.initial_detail}</code>
+              </div>
+            </div>
+          ) : ""}
+
+          <div class="panel">
+            <div class="panel-head">
+              <h3 class="panel-h3">Postmortem notes</h3>
+              <span class="panel-meta">{ctx.isAdmin ? "markdown · admin only" : "admin only"}</span>
+            </div>
+            {incident.notes ? (
+              <div style="padding:14px 18px">
+                <div class="md-content">{renderMarkdown(incident.notes) as "safe"}</div>
+              </div>
+            ) : (
+              <div style="padding:14px 18px">
+                <div class="md-empty">No notes yet.</div>
+              </div>
+            )}
+            {ctx.isAdmin ? (
+              <form method="post" action={`/incidents/${incident.id}/notes`} class="notes-edit">
+                <label>Edit notes (Markdown)</label>
+                <textarea name="notes" placeholder="Root cause · who fixed it · how to prevent next time · links to PRs and Slack threads" safe>{incident.notes ?? ""}</textarea>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button type="submit" class="btn btn-primary btn-mini">Save notes</button>
+                </div>
+              </form>
+            ) : ""}
+          </div>
+        </div>
+      </div>
+    </Layout>,
+  );
+}
+
+async function notesHandler(
+  req: Bun.BunRequest<"/incidents/:id/notes">,
+  _ctx: PageContext,
+): Promise<Response> {
+  const id = Number(req.params.id);
+  const form = await req.formData();
+  const raw = String(form.get("notes") ?? "");
+  setIncidentNotes(id, raw.trim() === "" ? null : raw);
+  return new Response(null, { status: 303, headers: { Location: `/incidents/${id}` } });
+}
+
 // JSON poll endpoint used by uptime.js to detect new unacked incidents
 // and play a sound + flash the tab title.
 import { db } from "../db";
@@ -162,6 +355,8 @@ function pollHandler(_req: Bun.BunRequest<"/incidents/poll">): Response {
 
 export const incidentsRoutes = {
   list: { GET: publicRoute(listHandler) },
+  detail: { GET: publicRoute(detailHandler) },
+  notes: { POST: adminRoute(notesHandler) },
   ack: { POST: adminRoute(ackHandler) },
   poll: { GET: publicRoute(pollHandler) },
 };

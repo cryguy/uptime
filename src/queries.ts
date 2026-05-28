@@ -19,11 +19,12 @@ export type IncidentRow = {
   ended_at: number | null;
   acked_at: number | null;
   initial_detail: string | null;
+  notes: string | null;
 };
 
 const activeIncidentsQuery = db.query<IncidentRow, []>(`
   SELECT i.id, i.monitor_id, m.name AS monitor_name, m.type AS monitor_type,
-         i.started_at, i.ended_at, i.acked_at, i.initial_detail
+         i.started_at, i.ended_at, i.acked_at, i.initial_detail, i.notes
   FROM incidents i
   JOIN monitors m ON m.id = i.monitor_id
   WHERE i.ended_at IS NULL
@@ -33,7 +34,7 @@ export const getActiveIncidents = (): IncidentRow[] => activeIncidentsQuery.all(
 
 const bannerIncidentQuery = db.query<IncidentRow, []>(`
   SELECT i.id, i.monitor_id, m.name AS monitor_name, m.type AS monitor_type,
-         i.started_at, i.ended_at, i.acked_at, i.initial_detail
+         i.started_at, i.ended_at, i.acked_at, i.initial_detail, i.notes
   FROM incidents i
   JOIN monitors m ON m.id = i.monitor_id
   WHERE i.ended_at IS NULL AND i.acked_at IS NULL
@@ -45,7 +46,7 @@ export const getBannerIncident = (): IncidentRow | null =>
 
 const recentResolvedQuery = db.query<IncidentRow, [number, number]>(`
   SELECT i.id, i.monitor_id, m.name AS monitor_name, m.type AS monitor_type,
-         i.started_at, i.ended_at, i.acked_at, i.initial_detail
+         i.started_at, i.ended_at, i.acked_at, i.initial_detail, i.notes
   FROM incidents i
   JOIN monitors m ON m.id = i.monitor_id
   WHERE i.ended_at IS NOT NULL AND i.ended_at > ?
@@ -57,7 +58,7 @@ export const getRecentlyResolved = (sinceMs: number, limit: number): IncidentRow
 
 const allIncidentsQuery = db.query<IncidentRow, [number]>(`
   SELECT i.id, i.monitor_id, m.name AS monitor_name, m.type AS monitor_type,
-         i.started_at, i.ended_at, i.acked_at, i.initial_detail
+         i.started_at, i.ended_at, i.acked_at, i.initial_detail, i.notes
   FROM incidents i
   JOIN monitors m ON m.id = i.monitor_id
   ORDER BY i.started_at DESC
@@ -70,6 +71,41 @@ const ackIncidentQuery = db.query(
 );
 export const ackIncident = (id: number): void => {
   ackIncidentQuery.run(Date.now(), id);
+};
+
+const oneIncidentQuery = db.query<IncidentRow, [number]>(`
+  SELECT i.id, i.monitor_id, m.name AS monitor_name, m.type AS monitor_type,
+         i.started_at, i.ended_at, i.acked_at, i.initial_detail, i.notes
+  FROM incidents i
+  JOIN monitors m ON m.id = i.monitor_id
+  WHERE i.id = ?
+`);
+export const getIncident = (id: number): IncidentRow | null =>
+  oneIncidentQuery.get(id) ?? null;
+
+const setIncidentNotesQuery = db.query(
+  "UPDATE incidents SET notes = ? WHERE id = ?"
+);
+export const setIncidentNotes = (id: number, notes: string | null): void => {
+  setIncidentNotesQuery.run(notes, id);
+};
+
+// Check results during the incident window — used by the detail page timeline.
+const incidentChecksQuery = db.query<
+  { checked_at: number; status: string; latency_ms: number | null; detail: string | null },
+  [number, number, number]
+>(`
+  SELECT checked_at, status, latency_ms, detail
+  FROM check_results
+  WHERE monitor_id = ? AND checked_at >= ? AND checked_at <= ?
+  ORDER BY checked_at ASC
+`);
+export const getIncidentChecks = (
+  monitorId: number,
+  startedAt: number,
+  endedAt: number | null,
+): Array<{ checked_at: number; status: string; latency_ms: number | null; detail: string | null }> => {
+  return incidentChecksQuery.all(monitorId, startedAt, endedAt ?? Date.now());
 };
 
 // Failed checks within an incident — derived from check_results, not stored.

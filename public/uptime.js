@@ -204,6 +204,20 @@
     });
     input.addEventListener("input", function () { activeIdx = 0; render(); });
     backdrop.addEventListener("click", function (e) { if (e.target === backdrop) close(); });
+
+    // Topbar "Search · jump to monitor" button — same open path as ⌘K.
+    document.querySelectorAll(".kbd-button").forEach(function (btn) {
+      btn.addEventListener("click", open);
+    });
+
+    // Swap the macOS-glyph hint to "Ctrl K" on non-macOS so Windows/Linux
+    // users see the shortcut their platform uses.
+    const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+    if (!isMac) {
+      document.querySelectorAll(".kbd-button kbd").forEach(function (el) {
+        el.textContent = "Ctrl K";
+      });
+    }
   }
 
   // ============================================================

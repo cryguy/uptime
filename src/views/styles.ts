@@ -439,6 +439,32 @@ label.inline input { width: auto; }
   background: var(--panel); border-right: 1px solid var(--border-2); border-bottom: 1px solid var(--border-2);
 }
 
+/* ===== Markdown-rendered notes ===== */
+.md-content { font-size: 13px; color: var(--text-2); line-height: 1.6; word-wrap: break-word; }
+.md-content > *:first-child { margin-top: 0; }
+.md-content > *:last-child { margin-bottom: 0; }
+.md-content p { margin: 0 0 10px; }
+.md-content h1, .md-content h2, .md-content h3 { color: var(--text); font-weight: 600; line-height: 1.3; margin: 14px 0 8px; letter-spacing: -0.01em; }
+.md-content h1 { font-size: 16px; }
+.md-content h2 { font-size: 14.5px; }
+.md-content h3 { font-size: 13px; }
+.md-content a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-soft); text-underline-offset: 2px; }
+.md-content a:hover { color: var(--accent-hi); text-decoration-color: var(--accent-hi); }
+.md-content code { font-family: var(--mono); font-size: 11.5px; background: var(--bg-2); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; color: var(--text-2); }
+.md-content pre { background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px; }
+.md-content pre code { background: transparent; border: none; padding: 0; font-size: 12px; color: var(--text); }
+.md-content ul, .md-content ol { padding-left: 20px; margin: 0 0 10px; }
+.md-content li { margin-bottom: 4px; }
+.md-content blockquote { border-left: 3px solid var(--border-2); padding-left: 12px; margin: 0 0 10px; color: var(--muted); }
+.md-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.md-content table { border-collapse: collapse; margin: 0 0 10px; }
+.md-content th, .md-content td { border: 1px solid var(--border); padding: 5px 9px; font-size: 12px; }
+.md-content th { background: var(--panel-2); font-weight: 500; }
+.md-content strong { color: var(--text); font-weight: 600; }
+.md-empty { color: var(--dim); font-size: 12.5px; font-style: italic; }
+.notes-edit { padding: 14px 18px; border-top: 1px solid var(--border); }
+.notes-edit textarea { min-height: 120px; font-family: var(--mono); font-size: 12.5px; }
+
 /* ===== Common utility ===== */
 .muted { color: var(--muted); font-size: 0.9em; }
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }

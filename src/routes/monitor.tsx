@@ -13,6 +13,7 @@ import {
 } from "../queries";
 import type { HttpConfig, MonitorType, SshConfig, TcpConfig } from "../checks/types";
 import { runCheckNow } from "../scheduler";
+import { renderMarkdown } from "../markdown";
 import { adminRoute, htmlResponse, publicRoute } from "./wrap";
 
 type AnyConfig = HttpConfig | TcpConfig | SshConfig;
@@ -30,6 +31,7 @@ type MonitorRecord = {
   group_name: string | null;
   is_public: boolean;
   muted_until: number | null;
+  notes: string | null;
 };
 
 const getMonitor = db.query<
@@ -38,6 +40,7 @@ const getMonitor = db.query<
     interval_seconds: number; timeout_ms: number;
     failure_threshold: number; success_threshold: number; enabled: number;
     group_name: string | null; is_public: number; muted_until: number | null;
+    notes: string | null;
     current_status: "up" | "down" | null; since: number | null; last_checked_at: number | null;
     consecutive_failures: number; consecutive_successes: number;
   },
@@ -45,7 +48,7 @@ const getMonitor = db.query<
 >(`
   SELECT m.id, m.name, m.type, m.config_encrypted, m.interval_seconds, m.timeout_ms,
          m.failure_threshold, m.success_threshold, m.enabled,
-         m.group_name, m.is_public, m.muted_until,
+         m.group_name, m.is_public, m.muted_until, m.notes,
          s.current_status, s.since, s.last_checked_at,
          s.consecutive_failures, s.consecutive_successes
   FROM monitors m
@@ -67,15 +70,15 @@ const recentResultsQuery = db.query<
 const insertMonitor = db.query(`
   INSERT INTO monitors (name, type, config_encrypted, interval_seconds, timeout_ms,
                         failure_threshold, success_threshold, enabled,
-                        group_name, is_public, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        group_name, is_public, notes, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   RETURNING id
 `);
 const updateMonitor = db.query(`
   UPDATE monitors
   SET name = ?, type = ?, config_encrypted = ?, interval_seconds = ?, timeout_ms = ?,
       failure_threshold = ?, success_threshold = ?, enabled = ?,
-      group_name = ?, is_public = ?, updated_at = ?
+      group_name = ?, is_public = ?, notes = ?, updated_at = ?
   WHERE id = ?
 `);
 const deleteMonitorQuery = db.query("DELETE FROM monitors WHERE id = ?");
@@ -141,6 +144,7 @@ function detailGet(
     group_name: row.group_name,
     is_public: row.is_public === 1,
     muted_until: row.muted_until,
+    notes: row.notes,
   };
 
   const boundIds = new Set(monitorWebhookIds.all(id).map((w) => w.webhook_id));
@@ -297,6 +301,18 @@ function detailGet(
             </div>
           </div>
 
+          {ctx.isAdmin && row.notes ? (
+            <div class="panel">
+              <div class="panel-head">
+                <h3 class="panel-h3">Notes</h3>
+                <span class="panel-meta">markdown · admin only</span>
+              </div>
+              <div style="padding:14px 18px">
+                <div class="md-content">{renderMarkdown(row.notes) as "safe"}</div>
+              </div>
+            </div>
+          ) : ""}
+
           <div class="panel">
             <div class="panel-head">
               <h3 class="panel-h3">Latency · last 1h</h3>
@@ -428,14 +444,14 @@ async function createOrUpdate(req: Request, existingId: number | null, ctx: Page
     updateMonitor.run(
       record.name, record.type, blob, record.interval_seconds, record.timeout_ms,
       record.failure_threshold, record.success_threshold, record.enabled ? 1 : 0,
-      record.group_name, record.is_public ? 1 : 0, now, existingId,
+      record.group_name, record.is_public ? 1 : 0, record.notes, now, existingId,
     );
     id = existingId;
   } else {
     const inserted = insertMonitor.get(
       record.name, record.type, blob, record.interval_seconds, record.timeout_ms,
       record.failure_threshold, record.success_threshold, record.enabled ? 1 : 0,
-      record.group_name, record.is_public ? 1 : 0, now, now,
+      record.group_name, record.is_public ? 1 : 0, record.notes, now, now,
     ) as { id: number };
     id = inserted.id;
   }
@@ -661,6 +677,12 @@ function MonitorForm({
       </div>
 
       <div class="form-section">
+        <div class="form-section-title">Notes (Markdown)</div>
+        <div class="form-section-desc">Long-lived context for this monitor — owner, dependencies, runbook links. Visible to admins only. Markdown renders on the detail panel.</div>
+        <textarea name="notes" placeholder="e.g. **Owner:** @ops · depends on db-primary · runbook at /docs/api-prod" safe>{monitor?.notes ?? ""}</textarea>
+      </div>
+
+      <div class="form-section">
         <div class="form-section-title">Webhooks · fire on state transition</div>
         <div class="form-section-desc">Selected webhooks are alerted on every up→down and down→up flip after thresholds are met.</div>
         {wh.length === 0 ? (
@@ -849,12 +871,14 @@ function parseMonitorForm(form: FormLike): ParseResult {
   const rawGroup = String(form.get("group_name") ?? "").trim();
   const group_name: string | null = rawGroup === "" ? null : rawGroup;
   const is_public = String(form.get("is_public") ?? "1") !== "0";
+  const rawNotes = String(form.get("notes") ?? "");
+  const notes: string | null = rawNotes.trim() === "" ? null : rawNotes;
   const webhookIds = form.getAll("webhook_ids").map((v) => Number(v)).filter((n) => Number.isInteger(n));
 
   const partial: Partial<MonitorRecord> = {
     name, type, interval_seconds, timeout_ms,
     failure_threshold, success_threshold, enabled,
-    group_name, is_public,
+    group_name, is_public, notes,
   };
 
   if (!name) return { error: "Name is required", partial, webhookIds };
@@ -936,7 +960,7 @@ function parseMonitorForm(form: FormLike): ParseResult {
     record: {
       name, type, config, interval_seconds, timeout_ms,
       failure_threshold, success_threshold, enabled,
-      group_name, is_public, muted_until: null,
+      group_name, is_public, muted_until: null, notes,
     },
     webhookIds,
   };

@@ -74,6 +74,10 @@ function TopBar({ ctx }: { ctx: PageContext }): JSX.Element {
         ) : ""}
       </nav>
       <div class="spacer" />
+      <button type="button" class="kbd-button" aria-label="Open command palette">
+        <span>Search · jump to monitor</span>
+        <kbd>⌘K</kbd>
+      </button>
       <ThemeToggle ctx={ctx} />
       {ctx.isAdmin
         ? <AdminAvatar />

@@ -27,6 +27,7 @@ db.exec(`
     muted_until INTEGER,
     group_name TEXT,
     is_public INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
@@ -91,7 +92,8 @@ db.exec(`
     started_at INTEGER NOT NULL,
     ended_at INTEGER,
     acked_at INTEGER,
-    initial_detail TEXT
+    initial_detail TEXT,
+    notes TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_incidents_open
     ON incidents(monitor_id) WHERE ended_at IS NULL;
@@ -119,6 +121,8 @@ function tryAlter(sql: string): void {
 tryAlter("ALTER TABLE monitors ADD COLUMN muted_until INTEGER");
 tryAlter("ALTER TABLE monitors ADD COLUMN group_name TEXT");
 tryAlter("ALTER TABLE monitors ADD COLUMN is_public INTEGER NOT NULL DEFAULT 1");
+tryAlter("ALTER TABLE monitors ADD COLUMN notes TEXT");
+tryAlter("ALTER TABLE incidents ADD COLUMN notes TEXT");
 
 // Backfill: any monitor currently in 'down' state without a corresponding open
 // incident gets one. This recovers history when the incidents table is added
