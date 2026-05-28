@@ -1,0 +1,850 @@
+openapi: 3.1.0
+info:
+  title: Uptime API
+  version: "0.1.0"
+  description: |
+    REST JSON API for the Uptime monitor. All endpoints require a Bearer
+    token in the `Authorization` header. Mint tokens at `/settings → API
+    tokens` in the web UI; the raw token is shown exactly once.
+
+    Conventions:
+      - Timestamps are epoch milliseconds.
+      - Collections return `{ resource_name: [...] }`.
+      - Single resources return `{ resource_name: {...} }`.
+      - Errors return `{ "error": "..." }` with 4xx/5xx status.
+      - Action endpoints with no useful payload return `204 No Content`.
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: cryguy
+    url: https://github.com/cryguy/uptime
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://{host}
+    description: Self-hosted
+    variables:
+      host:
+        default: uptime.example.com
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: monitors
+    description: CRUD and actions for monitored endpoints
+  - name: incidents
+    description: Down-period tracking, acknowledge, postmortem notes
+  - name: webhooks
+    description: Alert destinations
+  - name: stats
+    description: Fleet-wide KPIs
+  - name: meta
+    description: Schema discovery, liveness probe
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "up_<64-hex-chars>"
+      description: |
+        Token issued via the web UI at `/settings`. Stored hashed
+        (SHA-256) at rest; the raw token is shown once on creation.
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: monitor not found
+
+    MonitorType:
+      type: string
+      enum: [http, tcp, ssh]
+
+    MonitorStatus:
+      type: [string, "null"]
+      enum: [up, down, null]
+
+    HttpConfig:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          example: https://api.prod.example.com/health
+        method:
+          type: string
+          enum: [GET, POST, PUT, PATCH, DELETE, HEAD]
+          default: GET
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          example: { "X-Custom": "value" }
+        body:
+          type: string
+        auth:
+          oneOf:
+            - type: object
+              required: [type, username, password]
+              properties:
+                type: { const: basic }
+                username: { type: string }
+                password: { type: string }
+            - type: object
+              required: [type, token]
+              properties:
+                type: { const: bearer }
+                token: { type: string }
+        followRedirects:
+          type: boolean
+          default: true
+        expectedStatus:
+          oneOf:
+            - { type: integer, minimum: 100, maximum: 599 }
+            - { type: array, items: { type: integer, minimum: 100, maximum: 599 } }
+          example: 200
+        expectedBodyContains:
+          type: string
+        ignoreTlsErrors:
+          type: boolean
+          default: false
+
+    TcpConfig:
+      type: object
+      required: [host, port]
+      properties:
+        host: { type: string, example: db.internal }
+        port: { type: integer, minimum: 1, maximum: 65535, example: 5432 }
+
+    SshConfig:
+      type: object
+      required: [host, username, privateKey]
+      properties:
+        host: { type: string }
+        port: { type: integer, default: 22, minimum: 1, maximum: 65535 }
+        username: { type: string }
+        privateKey:
+          type: string
+          description: PEM-encoded private key (stored AES-256-GCM encrypted at rest)
+        passphrase: { type: string }
+        command:
+          type: string
+          description: Optional command to run after auth; the exit code is asserted.
+        expectExitCode:
+          type: integer
+          default: 0
+
+    MonitorConfig:
+      description: Type-specific config — shape depends on `type` field.
+      oneOf:
+        - $ref: "#/components/schemas/HttpConfig"
+        - $ref: "#/components/schemas/TcpConfig"
+        - $ref: "#/components/schemas/SshConfig"
+
+    Monitor:
+      type: object
+      required:
+        - id
+        - name
+        - type
+        - enabled
+        - is_public
+        - interval_seconds
+        - timeout_ms
+        - failure_threshold
+        - success_threshold
+        - current_status
+        - created_at
+        - updated_at
+      properties:
+        id: { type: integer }
+        name: { type: string, example: api.prod }
+        type: { $ref: "#/components/schemas/MonitorType" }
+        enabled: { type: boolean }
+        is_public:
+          type: boolean
+          description: Whether anonymous viewers see this monitor on the public dashboard.
+        group_name:
+          type: [string, "null"]
+          example: production
+        muted_until:
+          type: [integer, "null"]
+          description: Epoch ms — alerts suppressed until this time.
+        interval_seconds: { type: integer, minimum: 5 }
+        timeout_ms: { type: integer, minimum: 500 }
+        failure_threshold: { type: integer, minimum: 1 }
+        success_threshold: { type: integer, minimum: 1 }
+        notes:
+          type: [string, "null"]
+          description: Admin-only Markdown notes.
+        current_status: { $ref: "#/components/schemas/MonitorStatus" }
+        since:
+          type: [integer, "null"]
+          description: Epoch ms when current_status was first observed.
+        last_checked_at:
+          type: [integer, "null"]
+        latest_latency_ms:
+          type: [integer, "null"]
+        created_at: { type: integer }
+        updated_at: { type: integer }
+        config: { $ref: "#/components/schemas/MonitorConfig" }
+
+    MonitorCreate:
+      type: object
+      required: [name, type, config]
+      properties:
+        name: { type: string }
+        type: { $ref: "#/components/schemas/MonitorType" }
+        config: { $ref: "#/components/schemas/MonitorConfig" }
+        interval_seconds: { type: integer, minimum: 5, default: 60 }
+        timeout_ms: { type: integer, minimum: 500, default: 10000 }
+        failure_threshold: { type: integer, minimum: 1, default: 2 }
+        success_threshold: { type: integer, minimum: 1, default: 1 }
+        enabled: { type: boolean, default: true }
+        is_public: { type: boolean, default: true }
+        group_name: { type: [string, "null"] }
+        notes: { type: [string, "null"] }
+        webhook_ids:
+          type: array
+          items: { type: integer }
+
+    MonitorUpdate:
+      description: Partial update — any subset of MonitorCreate fields.
+      type: object
+      properties:
+        name: { type: string }
+        type: { $ref: "#/components/schemas/MonitorType" }
+        config: { $ref: "#/components/schemas/MonitorConfig" }
+        interval_seconds: { type: integer, minimum: 5 }
+        timeout_ms: { type: integer, minimum: 500 }
+        failure_threshold: { type: integer, minimum: 1 }
+        success_threshold: { type: integer, minimum: 1 }
+        enabled: { type: boolean }
+        is_public: { type: boolean }
+        group_name: { type: [string, "null"] }
+        notes: { type: [string, "null"] }
+        webhook_ids:
+          type: array
+          items: { type: integer }
+
+    UptimeWindow:
+      type: object
+      required: [up, down, total, percent]
+      properties:
+        up: { type: integer }
+        down: { type: integer }
+        total: { type: integer }
+        percent:
+          type: [number, "null"]
+          description: Percent up — null when total is 0.
+
+    MonitorStats:
+      type: object
+      properties:
+        uptime_24h: { $ref: "#/components/schemas/UptimeWindow" }
+        uptime_7d: { $ref: "#/components/schemas/UptimeWindow" }
+        uptime_30d: { $ref: "#/components/schemas/UptimeWindow" }
+        p50_latency_ms_1h: { type: [integer, "null"] }
+        p95_latency_ms_1h: { type: [integer, "null"] }
+        p99_latency_ms_1h: { type: [integer, "null"] }
+        mttr_30d_ms: { type: [number, "null"] }
+        uptime_buckets_24h:
+          type: array
+          minItems: 24
+          maxItems: 24
+          items:
+            type: string
+            enum: [up, down, empty]
+        latency_spark_1h:
+          type: array
+          items: { type: integer }
+
+    CheckResult:
+      type: object
+      required: [checked_at, status]
+      properties:
+        checked_at: { type: integer }
+        status:
+          type: string
+          enum: [up, down]
+        latency_ms: { type: [integer, "null"] }
+        detail: { type: [string, "null"] }
+
+    Incident:
+      type: object
+      required:
+        - id
+        - monitor_id
+        - monitor_name
+        - monitor_type
+        - started_at
+        - is_open
+        - is_acked
+        - duration_ms
+      properties:
+        id: { type: integer }
+        monitor_id: { type: integer }
+        monitor_name: { type: string }
+        monitor_type: { $ref: "#/components/schemas/MonitorType" }
+        started_at: { type: integer }
+        ended_at: { type: [integer, "null"] }
+        acked_at: { type: [integer, "null"] }
+        initial_detail: { type: [string, "null"] }
+        notes: { type: [string, "null"] }
+        is_open: { type: boolean }
+        is_acked: { type: boolean }
+        duration_ms: { type: integer }
+
+    IncidentNotesUpdate:
+      type: object
+      properties:
+        notes: { type: [string, "null"] }
+
+    MuteRequest:
+      type: object
+      properties:
+        duration_ms:
+          type: integer
+          minimum: 1
+          description: Mute for this many milliseconds from now.
+        until:
+          type: integer
+          description: Mute until this epoch ms timestamp.
+      oneOf:
+        - required: [duration_ms]
+        - required: [until]
+
+    WebhookStats:
+      type: object
+      properties:
+        delivered_24h: { type: integer }
+        retrying: { type: integer }
+        failed_recent: { type: integer }
+        last_delivery_at: { type: [integer, "null"] }
+
+    Webhook:
+      type: object
+      required: [id, name, url, enabled, created_at]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        url: { type: string, format: uri }
+        enabled: { type: boolean }
+        created_at: { type: integer }
+        stats: { $ref: "#/components/schemas/WebhookStats" }
+
+    WebhookCreate:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string, format: uri, pattern: "^https?://" }
+        enabled: { type: boolean, default: true }
+
+    FleetKpis:
+      type: object
+      properties:
+        total: { type: integer }
+        up: { type: integer }
+        down: { type: integer }
+        upPercent24h: { type: [number, "null"] }
+        p95LatencyMs: { type: [integer, "null"] }
+        mttr30dMs: { type: [number, "null"] }
+
+    RecentAlert:
+      type: object
+      properties:
+        id: { type: integer }
+        webhook_id: { type: integer }
+        webhook_name: { type: string }
+        monitor_id: { type: integer }
+        monitor_name: { type: string }
+        event:
+          type: string
+          enum: [up, down]
+        attempts: { type: integer }
+        delivered_at: { type: [integer, "null"] }
+        last_error: { type: [string, "null"] }
+        next_attempt_at: { type: integer }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid Bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: Invalid request body or parameters.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+paths:
+  /api/v1/healthz:
+    get:
+      tags: [meta]
+      operationId: healthCheck
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: Server is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+
+  /api/v1/openapi.yml:
+    get:
+      tags: [meta]
+      operationId: getOpenApiSpec
+      summary: Fetch this OpenAPI document
+      security: []
+      responses:
+        "200":
+          description: This document, as YAML.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/v1/monitors:
+    get:
+      tags: [monitors]
+      operationId: listMonitors
+      summary: List all monitors
+      responses:
+        "200":
+          description: Array of monitors with current state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  monitors:
+                    type: array
+                    items: { $ref: "#/components/schemas/Monitor" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [monitors]
+      operationId: createMonitor
+      summary: Create a monitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MonitorCreate" }
+      responses:
+        "201":
+          description: The created monitor (with config).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  monitor: { $ref: "#/components/schemas/Monitor" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/monitors/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [monitors]
+      operationId: readMonitor
+      summary: Read one monitor (with config + bound webhook ids)
+      responses:
+        "200":
+          description: Monitor details.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  monitor: { $ref: "#/components/schemas/Monitor" }
+                  webhook_ids:
+                    type: array
+                    items: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [monitors]
+      operationId: updateMonitor
+      summary: Partial update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MonitorUpdate" }
+      responses:
+        "200":
+          description: The updated monitor.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  monitor: { $ref: "#/components/schemas/Monitor" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [monitors]
+      operationId: deleteMonitor
+      summary: Delete a monitor and its history
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/monitors/{id}/pause:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [monitors]
+      operationId: pauseMonitor
+      summary: Stop checks (sets enabled = false)
+      responses:
+        "204": { description: Paused. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/monitors/{id}/resume:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [monitors]
+      operationId: resumeMonitor
+      summary: Re-enable checks (sets enabled = true)
+      responses:
+        "204": { description: Resumed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/monitors/{id}/mute:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [monitors]
+      operationId: muteMonitor
+      summary: Suppress alerts for a duration
+      description: |
+        Mute prevents webhook delivery on state transitions. The monitor
+        still runs, incidents still open, but no alerts fire until unmute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MuteRequest" }
+      responses:
+        "200":
+          description: Mute applied; returns the new muted_until.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  muted_until: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/monitors/{id}/unmute:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [monitors]
+      operationId: unmuteMonitor
+      summary: Clear mute
+      responses:
+        "204": { description: Unmuted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/monitors/{id}/run-now:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [monitors]
+      operationId: runCheckNow
+      summary: Trigger an immediate check
+      description: |
+        Fire-and-forget. The check runs asynchronously; result appears in
+        the next /checks listing within seconds.
+      responses:
+        "200":
+          description: Check queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queued: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/monitors/{id}/stats:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [monitors]
+      operationId: monitorStats
+      summary: Aggregated stats — uptime, latency, MTTR, hourly buckets, sparkline
+      responses:
+        "200":
+          description: Stats payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MonitorStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/monitors/{id}/checks:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+    get:
+      tags: [monitors]
+      operationId: listMonitorChecks
+      summary: Recent check results for one monitor
+      responses:
+        "200":
+          description: Newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checks:
+                    type: array
+                    items: { $ref: "#/components/schemas/CheckResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/incidents:
+    get:
+      tags: [incidents]
+      operationId: listIncidents
+      summary: List incidents
+      parameters:
+        - in: query
+          name: tab
+          schema:
+            type: string
+            enum: [open, resolved, all]
+            default: open
+      responses:
+        "200":
+          description: Array of incidents.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  incidents:
+                    type: array
+                    items: { $ref: "#/components/schemas/Incident" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/incidents/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [incidents]
+      operationId: readIncident
+      summary: Read one incident with timeline + counts
+      responses:
+        "200":
+          description: Incident detail.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  incident: { $ref: "#/components/schemas/Incident" }
+                  failed_checks: { type: integer }
+                  alerts_sent: { type: integer }
+                  checks:
+                    type: array
+                    items: { $ref: "#/components/schemas/CheckResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [incidents]
+      operationId: updateIncidentNotes
+      summary: Update postmortem notes (Markdown)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IncidentNotesUpdate" }
+      responses:
+        "200":
+          description: Updated incident.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  incident: { $ref: "#/components/schemas/Incident" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/incidents/{id}/ack:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [incidents]
+      operationId: acknowledgeIncident
+      summary: Acknowledge — silences the banner without resolving
+      responses:
+        "200":
+          description: Acked incident.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  incident: { $ref: "#/components/schemas/Incident" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/webhooks:
+    get:
+      tags: [webhooks]
+      operationId: listWebhooks
+      summary: List webhook destinations + delivery stats
+      responses:
+        "200":
+          description: Webhooks.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhooks:
+                    type: array
+                    items: { $ref: "#/components/schemas/Webhook" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [webhooks]
+      operationId: createWebhook
+      summary: Add a webhook destination
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookCreate" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhook: { $ref: "#/components/schemas/Webhook" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/webhooks/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    delete:
+      tags: [webhooks]
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/webhooks/{id}/toggle:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [webhooks]
+      operationId: toggleWebhook
+      summary: Flip enabled state
+      responses:
+        "200":
+          description: Updated webhook.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhook: { $ref: "#/components/schemas/Webhook" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/stats/fleet:
+    get:
+      tags: [stats]
+      operationId: fleetStats
+      summary: Fleet-wide KPIs + recent alert deliveries
+      responses:
+        "200":
+          description: KPIs and recent alerts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fleet: { $ref: "#/components/schemas/FleetKpis" }
+                  recent_alerts:
+                    type: array
+                    items: { $ref: "#/components/schemas/RecentAlert" }
+        "401": { $ref: "#/components/responses/Unauthorized" }

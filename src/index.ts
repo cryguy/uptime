@@ -110,6 +110,18 @@ const server = Bun.serve({
   // (which ssh2 → @types/node pulls in transitively).
   fetch(req) {
     const url = new URL(req.url);
+    // Serve the OpenAPI spec at both /openapi.yml (root convention used by
+    // Swagger UI / Postman auto-discovery) and /api/v1/openapi.yml (the
+    // API-versioned variant referenced by the spec itself). No auth — the
+    // schema isn't sensitive.
+    if (url.pathname === "/openapi.yml" || url.pathname === "/api/v1/openapi.yml") {
+      return new Response(Bun.file("./openapi.yml"), {
+        headers: {
+          "Content-Type": "application/yaml; charset=utf-8",
+          "Cache-Control": "public, max-age=300",
+        },
+      });
+    }
     const staticResp = serveStatic(url.pathname);
     if (staticResp) return staticResp;
     return new Response("Not Found", { status: 404 });

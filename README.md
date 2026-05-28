@@ -213,6 +213,10 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/v1/stats/fleet
 | `GET` | `/api/v1/stats/fleet` | KPIs (total, up, down, p95, MTTR) + recent alert deliveries |
 | `GET` | `/api/v1/healthz` | Returns `{"status": "ok"}` for liveness probes |
 
+### OpenAPI spec
+
+A full machine-readable spec is published at [`openapi.yml`](./openapi.yml) and served live by the running server at both `/openapi.yml` and `/api/v1/openapi.yml` (no auth — the schema itself isn't sensitive). Point Swagger UI, Postman, or an MCP-OpenAPI bridge at either URL.
+
 ### Conventions
 
 - Collections return `{ resource_name: [...] }`; single resources return `{ resource_name: {...} }`
