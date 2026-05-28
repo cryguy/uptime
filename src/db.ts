@@ -139,6 +139,27 @@ tryAlter("ALTER TABLE incidents ADD COLUMN notes TEXT");
 tryAlter("ALTER TABLE webhooks ADD COLUMN format TEXT NOT NULL DEFAULT 'generic'");
 tryAlter("ALTER TABLE webhooks ADD COLUMN template TEXT");
 
+// Self-heal: SQLite's `PRAGMA foreign_keys = ON` is per-connection. If any
+// other connection (a one-off script, a manual `sqlite3` CLI, an older
+// migration) ever deleted a monitor without FKs enabled, the dependent
+// rows in monitor_state / check_results / incidents / alert_queue /
+// monitor_webhooks linger as orphans and break aggregations like
+// "3 up of 2 monitors". This sweep at boot makes that whole class of
+// inconsistency impossible to observe in the dashboard.
+{
+  const orphanCleanup = [
+    "DELETE FROM monitor_state    WHERE monitor_id NOT IN (SELECT id FROM monitors)",
+    "DELETE FROM check_results    WHERE monitor_id NOT IN (SELECT id FROM monitors)",
+    "DELETE FROM incidents        WHERE monitor_id NOT IN (SELECT id FROM monitors)",
+    "DELETE FROM alert_queue      WHERE monitor_id NOT IN (SELECT id FROM monitors)",
+    "DELETE FROM monitor_webhooks WHERE monitor_id NOT IN (SELECT id FROM monitors)",
+    "DELETE FROM monitor_webhooks WHERE webhook_id NOT IN (SELECT id FROM webhooks)",
+  ];
+  let total = 0;
+  for (const sql of orphanCleanup) total += Number(db.run(sql).changes ?? 0);
+  if (total > 0) console.log(`db: cleaned ${total} orphan row(s) on boot`);
+}
+
 // Backfill: any monitor currently in 'down' state without a corresponding open
 // incident gets one. This recovers history when the incidents table is added
 // to a DB that already had down monitors, and is a no-op on a fresh boot.
