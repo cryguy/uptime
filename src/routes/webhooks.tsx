@@ -3,16 +3,17 @@ import { db } from "../db";
 import { Layout } from "../views/layout";
 import { formatAgoCompact } from "../views/components";
 import { getWebhookStats } from "../queries";
+import { FORMAT_LABELS, WEBHOOK_FORMATS, isValidFormat, type WebhookFormat } from "../webhook_formats";
 import type { PageContext } from "../views/context";
 import { adminRoute, htmlResponse } from "./wrap";
 
 const listWebhooks = db.query<
-  { id: number; name: string; url: string; enabled: number; created_at: number },
+  { id: number; name: string; url: string; enabled: number; format: string; template: string | null; created_at: number },
   []
->("SELECT id, name, url, enabled, created_at FROM webhooks ORDER BY created_at DESC");
+>("SELECT id, name, url, enabled, format, template, created_at FROM webhooks ORDER BY created_at DESC");
 
 const insertWebhook = db.query(
-  "INSERT INTO webhooks (name, url, enabled, created_at) VALUES (?, ?, ?, ?)"
+  "INSERT INTO webhooks (name, url, enabled, format, template, created_at) VALUES (?, ?, ?, ?, ?, ?)"
 );
 const deleteWebhookQuery = db.query("DELETE FROM webhooks WHERE id = ?");
 const toggleWebhookQuery = db.query(
@@ -54,18 +55,35 @@ function WebhooksPage({
 
       <div class="panel" style="padding:18px 20px;margin-bottom:16px">
         <div class="form-section-title" style="margin-bottom:4px">Add a webhook</div>
-        <div class="form-section-desc">URL must be http:// or https://. The first delivery happens the next time any bound monitor flips state.</div>
+        <div class="form-section-desc">URL must be http:// or https://. The payload format is chosen per webhook so each receiver gets the JSON shape it expects.</div>
         {error ? <div class="login-error" safe>{error}</div> : ""}
         <form method="post" action="/webhooks">
           <div class="form-row" style="grid-template-columns:1fr 2fr">
             <div>
               <label>Name</label>
-              <input name="name" placeholder="Slack #alerts" required />
+              <input name="name" placeholder="Slack #alerts · Google Chat ops · …" required />
             </div>
             <div>
               <label>URL</label>
-              <input name="url" type="url" placeholder="https://hooks.slack.com/services/..." required />
+              <input name="url" type="url" placeholder="https://hooks.slack.com/... · https://chat.googleapis.com/... · ..." required />
             </div>
+          </div>
+          <div class="form-row" style="grid-template-columns:1fr 2fr;margin-top:10px">
+            <div>
+              <label>Format</label>
+              <select name="format">
+                {WEBHOOK_FORMATS.map((f) => (
+                  <option value={f}>{FORMAT_LABELS[f].label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label>Custom template (only used when format = Custom)</label>
+              <textarea name="template" placeholder='{"text": "{{event}}: {{monitor.name}} — {{detail}} ({{latency_ms}}ms)"}' style="font-family:var(--mono);font-size:12px;min-height:64px"></textarea>
+            </div>
+          </div>
+          <div class="form-hint" style="margin-top:6px">
+            Placeholders: <code safe>{"{{event}} {{monitor.id}} {{monitor.name}} {{detail}} {{latency_ms}} {{at}} {{at_iso}}"}</code>. Values are JSON-string-escaped on substitution.
           </div>
           <div style="display:flex;gap:8px;margin-top:18px">
             <button type="submit" class="btn btn-primary">Save webhook</button>
@@ -86,9 +104,13 @@ function WebhooksPage({
           <div class="incident-card muted" style="text-align:center;padding:32px">No webhooks yet. Add one above.</div>
         ) : rows.map((w) => {
           const s = stats.get(w.id)!;
+          const fmt = isValidFormat(w.format) ? w.format : "generic";
           return (
             <div class="wh-table-row">
-              <div class="wh-name" safe>{w.name}</div>
+              <div class="wh-name">
+                <span safe>{w.name}</span>
+                <span class="type-chip" style="margin-left:8px" safe>{FORMAT_LABELS[fmt].label}</span>
+              </div>
               <div class="wh-url" title={w.url} safe>{w.url}</div>
               <div>
                 <form method="post" action={`/webhooks/${w.id}/toggle`} class="wh-toggle-form">
@@ -135,11 +157,17 @@ async function createHandler(req: Bun.BunRequest<"/webhooks">, ctx: PageContext)
   const form = await req.formData();
   const name = String(form.get("name") ?? "").trim();
   const url = String(form.get("url") ?? "").trim();
+  const formatStr = String(form.get("format") ?? "generic").trim();
+  const templateStr = String(form.get("template") ?? "").trim();
   if (!name) return htmlResponse(<WebhooksPage ctx={ctx} error="Name is required" />, { status: 400 });
   if (!isHttpUrl(url)) {
     return htmlResponse(<WebhooksPage ctx={ctx} error="URL must be http:// or https://" />, { status: 400 });
   }
-  insertWebhook.run(name, url, 1, Date.now());
+  const format: WebhookFormat = isValidFormat(formatStr) ? formatStr : "generic";
+  if (format === "custom" && !templateStr) {
+    return htmlResponse(<WebhooksPage ctx={ctx} error="Custom format requires a template" />, { status: 400 });
+  }
+  insertWebhook.run(name, url, 1, format, templateStr || null, Date.now());
   return new Response(null, { status: 303, headers: { Location: "/webhooks" } });
 }
 

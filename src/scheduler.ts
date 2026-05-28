@@ -2,6 +2,7 @@ import { db } from "./db";
 import { decryptJSON } from "./config";
 import { runCheck } from "./checks";
 import type { CheckOutcome, HttpConfig, MonitorConfig, MonitorType, SshConfig, TcpConfig } from "./checks/types";
+import { formatPayload, isValidFormat, type AlertEvent, type WebhookFormat } from "./webhook_formats";
 
 type MonitorRow = {
   id: number;
@@ -50,9 +51,15 @@ const upsertState = db.query(`
     last_checked_at = excluded.last_checked_at
 `);
 
-const webhooksForMonitor = db.query<{ webhook_id: number }, [number]>(
-  "SELECT webhook_id FROM monitor_webhooks WHERE monitor_id = ?"
-);
+const webhooksForMonitor = db.query<
+  { id: number; format: string; template: string | null },
+  [number]
+>(`
+  SELECT w.id, w.format, w.template
+  FROM monitor_webhooks mw
+  JOIN webhooks w ON w.id = mw.webhook_id
+  WHERE mw.monitor_id = ? AND w.enabled = 1
+`);
 const insertAlert = db.query(
   "INSERT INTO alert_queue (webhook_id, monitor_id, event, payload, next_attempt_at) VALUES (?, ?, ?, ?, ?)"
 );
@@ -154,15 +161,18 @@ function enqueueAlerts(
 ): void {
   const bindings = webhooksForMonitor.all(monitorId);
   if (bindings.length === 0) return;
-  const payload = JSON.stringify({
+  const ev: AlertEvent = {
     event,
-    monitor: { id: monitorId, name: monitorName },
+    monitor_id: monitorId,
+    monitor_name: monitorName,
     latency_ms: outcome.latencyMs,
     detail: outcome.detail,
     at,
-  });
-  for (const { webhook_id } of bindings) {
-    insertAlert.run(webhook_id, monitorId, event, payload, at);
+  };
+  for (const w of bindings) {
+    const format: WebhookFormat = isValidFormat(w.format) ? w.format : "generic";
+    const payload = formatPayload(format, w.template, ev);
+    insertAlert.run(w.id, monitorId, event, payload, at);
   }
 }
 

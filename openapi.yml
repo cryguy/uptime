@@ -329,14 +329,32 @@ components:
         failed_recent: { type: integer }
         last_delivery_at: { type: [integer, "null"] }
 
+    WebhookFormat:
+      type: string
+      enum: [generic, slack, discord, google_chat, custom]
+      description: |
+        Per-webhook payload shape:
+        - **generic** — raw `{event, monitor, latency_ms, detail, at}`
+        - **slack** — Slack Block Kit `{text, blocks}`
+        - **discord** — Discord embeds `{content, embeds}`
+        - **google_chat** — Google Chat `{text}`
+        - **custom** — admin-supplied template with `{{var}}` placeholders
+
     Webhook:
       type: object
-      required: [id, name, url, enabled, created_at]
+      required: [id, name, url, enabled, format, created_at]
       properties:
         id: { type: integer }
         name: { type: string }
         url: { type: string, format: uri }
         enabled: { type: boolean }
+        format: { $ref: "#/components/schemas/WebhookFormat" }
+        template:
+          type: [string, "null"]
+          description: |
+            Required when `format=custom`. Substituted placeholders:
+            `{{event}} {{monitor.id}} {{monitor.name}} {{detail}} {{latency_ms}} {{at}} {{at_iso}}`.
+            Values are JSON-string-escaped on substitution.
         created_at: { type: integer }
         stats: { $ref: "#/components/schemas/WebhookStats" }
 
@@ -347,6 +365,10 @@ components:
         name: { type: string }
         url: { type: string, format: uri, pattern: "^https?://" }
         enabled: { type: boolean, default: true }
+        format:
+          $ref: "#/components/schemas/WebhookFormat"
+          default: generic
+        template: { type: [string, "null"] }
 
     FleetKpis:
       type: object

@@ -23,6 +23,7 @@ import {
   getRecentlyResolved, getWebhookStats, setIncidentNotes,
   type IncidentRow,
 } from "../queries";
+import { isValidFormat, WEBHOOK_FORMATS } from "../webhook_formats";
 import { apiRoute } from "./wrap";
 
 type AnyConfig = HttpConfig | TcpConfig | SshConfig;
@@ -487,11 +488,11 @@ async function updateIncidentNotesHandler(req: Bun.BunRequest<"/api/v1/incidents
 // ===== Webhook handlers =====
 
 const listWebhooksQuery = db.query<
-  { id: number; name: string; url: string; enabled: number; created_at: number },
+  { id: number; name: string; url: string; enabled: number; format: string; template: string | null; created_at: number },
   []
->("SELECT id, name, url, enabled, created_at FROM webhooks ORDER BY created_at DESC");
-const insertWebhookQuery = db.query<{ id: number }, [string, string, number, number]>(
-  "INSERT INTO webhooks (name, url, enabled, created_at) VALUES (?, ?, ?, ?) RETURNING id"
+>("SELECT id, name, url, enabled, format, template, created_at FROM webhooks ORDER BY created_at DESC");
+const insertWebhookQuery = db.query<{ id: number }, [string, string, number, string, string | null, number]>(
+  "INSERT INTO webhooks (name, url, enabled, format, template, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
 );
 const deleteWebhookQuery = db.query("DELETE FROM webhooks WHERE id = ?");
 const toggleWebhookQuery = db.query("UPDATE webhooks SET enabled = 1 - enabled WHERE id = ?");
@@ -505,13 +506,15 @@ function isHttpUrl(s: string): boolean {
   }
 }
 
-function serializeWebhook(row: { id: number; name: string; url: string; enabled: number; created_at: number }) {
+function serializeWebhook(row: { id: number; name: string; url: string; enabled: number; format: string; template: string | null; created_at: number }) {
   const stats = getWebhookStats(row.id);
   return {
     id: row.id,
     name: row.name,
     url: row.url,
     enabled: row.enabled === 1,
+    format: row.format,
+    template: row.template,
     created_at: row.created_at,
     stats,
   };
@@ -522,13 +525,21 @@ function listWebhooksHandler(_req: Bun.BunRequest<"/api/v1/webhooks">): Response
 }
 
 async function createWebhookHandler(req: Bun.BunRequest<"/api/v1/webhooks">): Promise<Response> {
-  const body = await readBody<{ name?: string; url?: string; enabled?: boolean }>(req);
+  const body = await readBody<{ name?: string; url?: string; enabled?: boolean; format?: string; template?: string | null }>(req);
   if (!body) return error("invalid JSON body", 400);
   const name = (body.name ?? "").trim();
   const url = (body.url ?? "").trim();
   if (!name) return error("name is required", 400);
   if (!isHttpUrl(url)) return error("url must be http:// or https://", 400);
-  const inserted = insertWebhookQuery.get(name, url, body.enabled === false ? 0 : 1, Date.now());
+  const formatStr = body.format ?? "generic";
+  if (!isValidFormat(formatStr)) {
+    return error(`format must be one of: ${WEBHOOK_FORMATS.join(", ")}`, 400);
+  }
+  const template = body.template ?? null;
+  if (formatStr === "custom" && (!template || !template.trim())) {
+    return error("custom format requires a non-empty template", 400);
+  }
+  const inserted = insertWebhookQuery.get(name, url, body.enabled === false ? 0 : 1, formatStr, template, Date.now());
   if (!inserted) return error("insert failed", 500);
   const row = listWebhooksQuery.all().find((w) => w.id === inserted.id);
   return json({ webhook: row ? serializeWebhook(row) : null }, 201);

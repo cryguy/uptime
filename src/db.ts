@@ -57,6 +57,8 @@ db.exec(`
     name TEXT NOT NULL,
     url TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
+    format TEXT NOT NULL DEFAULT 'generic',
+    template TEXT,
     created_at INTEGER NOT NULL
   );
 
@@ -134,6 +136,8 @@ tryAlter("ALTER TABLE monitors ADD COLUMN group_name TEXT");
 tryAlter("ALTER TABLE monitors ADD COLUMN is_public INTEGER NOT NULL DEFAULT 1");
 tryAlter("ALTER TABLE monitors ADD COLUMN notes TEXT");
 tryAlter("ALTER TABLE incidents ADD COLUMN notes TEXT");
+tryAlter("ALTER TABLE webhooks ADD COLUMN format TEXT NOT NULL DEFAULT 'generic'");
+tryAlter("ALTER TABLE webhooks ADD COLUMN template TEXT");
 
 // Backfill: any monitor currently in 'down' state without a corresponding open
 // incident gets one. This recovers history when the incidents table is added
