@@ -295,6 +295,13 @@ cd /opt/uptime          # directory holding .env and the binary
 ./uptime-linux-x64      # SQLite DB is created at ./data/uptime.db
 ```
 
+The binary also bundles the setup helpers, so you can generate the secrets above on a fresh machine — no repo checkout or Bun install needed:
+
+```bash
+./uptime-linux-x64 keygen          # prints SESSION_SECRET + ENCRYPTION_KEY
+./uptime-linux-x64 hash 'your-pw'  # prints ADMIN_PASSWORD_HASH
+```
+
 **Notes**
 
 - **Secrets are never baked in.** `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, and `ENCRYPTION_KEY` are read at runtime, exactly as from source.
