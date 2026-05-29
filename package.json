@@ -6,6 +6,7 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts",
+    "build": "bun run scripts/build.ts",
     "hash": "bun run scripts/hash.ts",
     "keygen": "bun run scripts/keygen.ts",
     "fetch-fonts": "bun run scripts/fetch-fonts.ts"

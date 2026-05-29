@@ -13,6 +13,7 @@ import { incidentsRoutes } from "./routes/incidents";
 import { settingsRoutes } from "./routes/settings";
 import { preferenceRoutes } from "./routes/preferences";
 import { apiRoutes } from "./routes/api";
+import { STATIC_ASSETS, OPENAPI_ASSET } from "./assets";
 
 purgeExpiredSessions();
 setInterval(purgeExpiredSessions, 60 * 60 * 1000);
@@ -115,7 +116,7 @@ const server = Bun.serve({
     // API-versioned variant referenced by the spec itself). No auth — the
     // schema isn't sensitive.
     if (url.pathname === "/openapi.yml" || url.pathname === "/api/v1/openapi.yml") {
-      return new Response(Bun.file("./openapi.yml"), {
+      return new Response(Bun.file(OPENAPI_ASSET), {
         headers: {
           "Content-Type": "application/yaml; charset=utf-8",
           "Cache-Control": "public, max-age=300",
@@ -134,16 +135,16 @@ const server = Bun.serve({
 
 console.log(`Uptime running on http://localhost:${server.port}`);
 
-// Whitelist-based static dispatcher. Restricted to known filenames under
-// /static/ and /static/fonts/ to prevent any path traversal.
+// Allowlist-based static dispatcher backed by the embedded-asset map. Only keys
+// present in STATIC_ASSETS are served, which both forecloses path traversal and
+// means assets are read from the binary (or from disk in dev) — never resolved
+// against the process's current working directory.
 function serveStatic(pathname: string): Response | null {
   if (!pathname.startsWith("/static/")) return null;
   const rest = pathname.slice("/static/".length);
-  if (rest.includes("..") || rest.startsWith("/") || rest.endsWith("/")) return null;
-  const isTopLevelJs = rest === "htmx.min.js" || rest === "spark.js" || rest === "uptime.js";
-  const isFontAsset = /^fonts\/[A-Za-z0-9_-]+\.(woff2|css)$/.test(rest);
-  if (!isTopLevelJs && !isFontAsset) return null;
-  return new Response(Bun.file(`./public/${rest}`), {
+  const assetPath = STATIC_ASSETS[rest];
+  if (!assetPath) return null;
+  return new Response(Bun.file(assetPath), {
     headers: {
       "Content-Type": contentTypeFor(rest),
       "Cache-Control": "public, max-age=86400",

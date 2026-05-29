@@ -123,7 +123,7 @@ After first boot, the admin username, password hash, and encryption key are mirr
 - **SSH client:** [`ssh2`](https://github.com/mscdex/ssh2)
 - **Fonts:** Inter Tight + JetBrains Mono, self-hosted (run `bun run fetch-fonts` to regenerate)
 
-No build step. No bundler. No transpiler beyond Bun's built-in TSX/JSX support.
+No build step to develop or run — Bun executes the TSX/JSX directly. The only compile is the optional [release build](#release-builds), which bundles everything into standalone binaries.
 
 ---
 
@@ -139,6 +139,7 @@ src/
 ├── scheduler.ts          tick loop, 4-rule state machine, incident open/close
 ├── alerts.ts             webhook delivery loop with backoff
 ├── queries.ts            aggregation queries (KPIs, uptime, sparklines, MTTR)
+├── assets.ts             static files embedded into the release binary
 ├── checks/               http / tcp / ssh check implementations
 ├── routes/               login · dashboard · monitor · webhooks · incidents · settings · preferences
 └── views/                layout, components, tokens + component CSS
@@ -150,7 +151,8 @@ public/
 scripts/
 ├── hash.ts               bun run hash <password> — emits .env-ready line
 ├── keygen.ts             bun run keygen — emits SESSION_SECRET + ENCRYPTION_KEY
-└── fetch-fonts.ts        bun run fetch-fonts — re-downloads Google Fonts woff2 files
+├── fetch-fonts.ts        bun run fetch-fonts — re-downloads Google Fonts woff2 files
+└── build.ts              bun run build — cross-compiles standalone binaries to dist/
 ```
 
 ---
@@ -265,6 +267,40 @@ bunx tsc --noEmit   # typecheck
 ```
 
 There's no separate test suite at the moment — verification is end-to-end via HTTP smoke tests (see commit history).
+
+---
+
+## Release builds
+
+Developing or self-hosting from source needs no build step — `bun run start` runs the TypeScript directly. To distribute the app as a standalone executable that needs **neither Bun nor `node_modules`** on the target machine, compile it:
+
+```bash
+bun run build
+```
+
+This cross-compiles five self-contained binaries into `dist/`. Each one embeds the Bun runtime, `bun:sqlite`, every dependency, and all static assets (UI scripts, fonts, the OpenAPI spec) — so it runs from any directory with nothing alongside it:
+
+| Binary | Platform | Notes |
+|---|---|---|
+| `uptime-darwin-x64` | macOS (Intel) | |
+| `uptime-darwin-arm64` | macOS (Apple Silicon) | |
+| `uptime-linux-x64` | Linux · glibc | Baseline build — runs on any x64 CPU and every mainstream distro (Ubuntu, Debian, RHEL, Fedora, Arch). |
+| `uptime-linux-x64-musl` | Linux · musl | For Alpine and `FROM scratch` containers. The glibc binary won't start here, and vice-versa. |
+| `uptime-windows-x64.exe` | Windows | Baseline build. |
+
+A binary is self-contained but **not self-configuring** — it needs the same environment as running from source (see [Configuration](#configuration)). It auto-loads a `.env` from the working directory:
+
+```bash
+cd /opt/uptime          # directory holding .env and the binary
+./uptime-linux-x64      # SQLite DB is created at ./data/uptime.db
+```
+
+**Notes**
+
+- **Secrets are never baked in.** `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, and `ENCRYPTION_KEY` are read at runtime, exactly as from source.
+- **macOS Gatekeeper:** binaries cross-compiled from another OS are unsigned, so the first run is quarantined. Clear it with `xattr -d com.apple.quarantine ./uptime-darwin-arm64`, or codesign on a Mac.
+- **No single universal Linux binary exists** — glibc and musl are a hard split (Bun's executables dynamically link their libc), so Alpine needs the `-musl` artifact. The `-baseline` builds run regardless of CPU age.
+- **SSH checks** use ssh2's pure-JS crypto in the binary (its optional native addon can't be cross-compiled) — no functional difference for monitoring.
 
 ---
 
